@@ -1,6 +1,5 @@
 class InterviewManager {
     constructor() {
-        // ｛service_name｝にサービス名を
         this.questions = [
             "{service_name}以外の電子書籍サービスや雑誌アプリを利用したことがありますか？それらのどの点が魅力的でしたか？",
             "{service_name}について、どのように知りましたか？その際、どのような印象を持ちましたか？",
@@ -17,25 +16,24 @@ class InterviewManager {
         this.lastResponse = "";
         this.isInterviewStarted = false;
         this.conversationHistory = [];
-        this.transitionMessages = [
-            "なるほど、理解できました。それでは次の質問に移らせていただきます。",
-            "とても参考になりました。では、次の質問をさせていただきます。",
-            "貴重なご意見ありがとうございます。それでは次の質問に進ませていただきます。"
-        ];
         this.isTransitioning = false;
         this.waitingForAnswer = false;
 
-        // ユーザー操作のイベントリスナーを初期化
         this.initializeEventListeners();
     }
 
-    // ユーザーの入力メッセージをGPT-4に送信し、応答を生成
     async callGPT4(userInput) {
         try {
+            if (this.followUpCount > 2) {
+                return;
+            }
+
             this.conversationHistory.push({ role: 'user', content: userInput });
-            const systemPrompt = this.followUpCount > 0
-                ? `あなたは熟練したインタビュアーです。回答の具体性を評価し、必要に応じて追加の質問を行ってください。前回の回答：「${this.lastResponse}」`
-                : "あなたは熟練したインタビュアーです。回答の具体性を評価し、必要に応じて追加の質問を行ってください。";
+            const systemPrompt = `あなたは熟練したインタビュアーです。これは${this.followUpCount}回目のフォローアップです。
+                ${this.followUpCount === 1 || this.followUpCount === 2 ? 
+                '回答の具体性を評価し、より詳しい情報を引き出すための質問を1つだけ簡潔に行ってください。' : 
+                '初回の質問です。回答を確認してください。'}
+                前回の回答：「${this.lastResponse}」`;
 
             const response = await $.ajax({
                 url: CONFIG.API_ENDPOINT,
@@ -55,7 +53,6 @@ class InterviewManager {
                 })
             });
 
-            // アシスタントの応答を会話履歴に追加
             this.conversationHistory.push({
                 role: 'assistant',
                 content: response.choices[0].message.content
@@ -67,7 +64,6 @@ class InterviewManager {
         }
     }
 
-    // チャット表示にメッセージを追加し、ユーザーかアシスタントかを区別
     addMessage(message, isUser) {
         const messageDiv = $('<div></div>')
             .addClass('message')
@@ -77,60 +73,46 @@ class InterviewManager {
         $('#chat-box').scrollTop($('#chat-box')[0].scrollHeight);
     }
 
-    // 現在の質問をユーザーに表示
     showQuestionNumber() {
         if (this.currentQuestion < this.questions.length) {
             this.addMessage(this.questions[this.currentQuestion], false);
         }
     }
 
-    // 応答を処理し、フォローアップ質問が必要か判断
     async handleResponse(response) {
         if (this.isTransitioning) return;
 
-        let cleanResponse = response;
-        let shouldFollowUp = true;
-        let isWaitingForAnswer = false;
-
-        // 応答内の特別なタグを処理
-        if (response.includes('[NO_FOLLOWUP]')) {
-            cleanResponse = response.replace('[NO_FOLLOWUP]', '').trim();
-            shouldFollowUp = false;
-        }
-        if (response.includes('[WAITING_ANSWER]')) {
-            cleanResponse = response.replace('[WAITING_ANSWER]', '').trim();
-            isWaitingForAnswer = true;
-        }
-
+        let cleanResponse = response.trim();
         this.lastResponse = cleanResponse;
-        this.addMessage(cleanResponse, false);
+        
+        // フォローアップ質問の場合のみ応答を表示
+        if (this.followUpCount < 2) {
+            this.addMessage(cleanResponse, false);
+        }
 
-        if (isWaitingForAnswer) {
+        this.followUpCount++;
+
+        if (this.followUpCount < 2) {
+            this.enableInput();
+        } else if (this.followUpCount === 2) {
             this.waitingForAnswer = true;
             this.enableInput();
-        } else if (shouldFollowUp && this.followUpCount < 2) {
-            this.followUpCount++;
-            this.enableInput();
-        } else {
+        } else if (this.waitingForAnswer) {
+            this.waitingForAnswer = false;
             await this.transitionToNextQuestion();
         }
     }
 
-    // 次の質問に移行
     async transitionToNextQuestion() {
-        if (this.waitingForAnswer) return;
-
         this.isTransitioning = true;
         this.followUpCount = 0;
         this.currentQuestion++;
         this.conversationHistory = [];
-        this.waitingForAnswer = false;
-
+    
         if (this.currentQuestion < this.questions.length) {
-            const transitionMessage = this.transitionMessages[Math.floor(Math.random() * this.transitionMessages.length)];
             await new Promise(resolve => {
                 setTimeout(() => {
-                    this.addMessage(transitionMessage, false);
+                    this.addMessage("貴重なご意見ありがとうございます。それでは次の質問に進ませていただきます。", false);
                     setTimeout(() => {
                         this.isTransitioning = false;
                         this.askNextQuestion();
@@ -139,13 +121,12 @@ class InterviewManager {
                 }, 1000);
             });
         } else {
-            this.addMessage("インタビューにご協力いただき、誠にありがとうございました。貴重なご意見をお聞かせいただき、大変参考になりました。", false);
+            this.addMessage("インタビューにご協力いただき、誠にありがとうございました。", false);
             this.disableInput();
             $('#start-interview').text('インタビュー終了').prop('disabled', true);
         }
     }
-
-    // 次の質問を表示
+    
     askNextQuestion() {
         setTimeout(() => {
             this.showQuestionNumber();
@@ -153,7 +134,6 @@ class InterviewManager {
         }, 500);
     }
 
-    // インタビューセッションを開始
     startInterview() {
         if (!this.isInterviewStarted) {
             this.isInterviewStarted = true;
@@ -164,37 +144,30 @@ class InterviewManager {
         }
     }
 
-    // ユーザーの入力を有効化（質問に答えられる状態にする）
     enableInput() {
         $('#user-input').prop('disabled', false).focus();
         $('#send').prop('disabled', false);
     }
 
-    // ユーザーの入力を無効化（応答待機状態など）
     disableInput() {
         $('#user-input').prop('disabled', true);
         $('#send').prop('disabled', true);
     }
 
-    // ユーザー操作のイベントリスナーを初期化
     initializeEventListeners() {
         $('#start-interview').click(() => {
             $('#start-interview').prop('disabled', true);
             this.startInterview();
         });
-
+    
         $('#send').click(async () => {
             const userInput = $('#user-input').val().trim();
             if (userInput && !this.isTransitioning) {
                 this.addMessage(userInput, true);
                 this.disableInput();
                 $('#user-input').val('');
+
                 const response = await this.callGPT4(userInput);
-
-                if (this.waitingForAnswer) {
-                    this.waitingForAnswer = false;
-                }
-
                 await this.handleResponse(response);
             }
         });
